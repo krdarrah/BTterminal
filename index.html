@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="libraries/p5.min.js"></script>
+  <style>
+    /* Common styles */
+    body {
+      font-family: "Courier New", Courier, monospace;
+      height: 100vh;
+      margin: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      transition: background-color 0.3s, color 0.3s;
+    }
+    #container {
+      display: flex;
+      flex-direction: column;
+      width: 90%;
+      height: 90%;
+      padding: 20px;
+      box-sizing: border-box;
+      transition: background-color 0.3s, color 0.3s;
+    }
+    #connectButton, #sendButton, #clearConsoleButton, #toggleTimestampButton, #toggleThemeButton {
+      padding: 10px;
+      font-size: 16px;
+      border: 1px solid;
+      cursor: pointer;
+      margin-bottom: 10px;
+      transition: background-color 0.3s, color 0.3s;
+    }
+    #sendButton {
+      margin-top: 10px;
+    }
+    #dataToSend {
+      padding: 10px;
+      font-size: 16px;
+      margin-top: 10px;
+      transition: background-color 0.3s, color 0.3s;
+    }
+    #receivedData {
+      padding: 10px;
+      overflow-y: auto;
+      border: 1px solid;
+      white-space: pre-wrap;
+      flex: 1;
+      margin-bottom: 20px;
+      transition: background-color 0.3s, color 0.3s;
+    }
+    #buttonContainer {
+      display: flex;
+      gap: 10px;
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+    }
+    /* Dark mode styles */
+    body.dark, #container.dark {
+      background-color: #000;
+      color: #0f0;
+    }
+    #dataToSend.dark {
+      background-color: #111;
+      color: #c080ff;
+      border-color: #0f0;
+    }
+    #receivedData.dark {
+      background-color: #111;
+      color: #0f0;
+      border-color: #0f0;
+    }
+    #connectButton.dark, #sendButton.dark, #clearConsoleButton.dark, #toggleTimestampButton.dark, #toggleThemeButton.dark {
+      background-color: #333;
+      color: #0f0;
+      border-color: #0f0;
+    }
+    /* Light mode styles */
+    body.light, #container.light {
+      background-color: #f8f9fa;
+      color: #2c3e50;
+    }
+    #sendButton.light {
+      background-color: #dee2e6;
+      color: #2c3e50;
+      border-color: #2c3e50;
+    }
+    #receivedData.light {
+      background-color: #e9ecef;
+      color: #3c3f41;
+      border-color: #2c3e50;
+    }
+    #connectButton.light, #sendButton.light, #clearConsoleButton.light, #toggleTimestampButton.light, #toggleThemeButton.light {
+      background-color: #dee2e6;
+      color: #2c3e50;
+      border-color: #2c3e50;
+    }
+    #connectButton.light:hover, #sendButton.light:hover, #clearConsoleButton.light:hover, #toggleTimestampButton.light:hover, #toggleThemeButton.light:hover {
+      background-color: #ced4da;
+      color: #1c2833;
+    }
+    #connectButton.dark:hover, #sendButton.dark:hover, #clearConsoleButton.dark:hover, #toggleTimestampButton.dark:hover, #toggleThemeButton.dark:hover {
+      background-color: #555;
+      color: #bada55;
+    }
+  </style>
+</head>
+<body class="dark">
+  <div id="container" class="dark">
+    <button id="connectButton" class="dark">Connect to BLE Device</button>
+    <div id="receivedData" class="dark"></div>
+    <input id="dataToSend" type="text" placeholder="Type your command here..." class="dark">
+    <button id="sendButton" class="dark">Send</button>
+    <div id="buttonContainer">
+      <button id="clearConsoleButton" class="dark">Clear Console</button>
+      <button id="toggleTimestampButton" class="dark">Enable Timestamps</button>
+      <button id="toggleThemeButton" class="dark">Light Mode</button>
+    </div>
+  </div>
+  <script>
+    // BluetoothTerminal class definition
+    class BluetoothTerminal {
+      constructor(serviceUuid = 0xFFE0, rxCharacteristicUuid = 0xFFE1, txCharacteristicUuid = 0xFFE2) {
+        this._serviceUuid = serviceUuid;
+        this._txCharacteristicUuid = txCharacteristicUuid;
+        this._rxCharacteristicUuid = rxCharacteristicUuid;
+        this._device = null;
+        this._txCharacteristic = null;
+        this._rxCharacteristic = null;
+        this._timestampsEnabled = false;
+      }
+
+      async connect() {
+        try {
+          console.log('Requesting Bluetooth Device...');
+          this._device = await navigator.bluetooth.requestDevice({
+            filters: [{ services: [this._serviceUuid] }]
+          });
+
+          console.log('Connecting to GATT Server...');
+          const server = await this._device.gatt.connect();
+
+          console.log('Getting Service...');
+          const service = await server.getPrimaryService(this._serviceUuid);
+
+          console.log('Getting TX Characteristic...');
+          this._txCharacteristic = await service.getCharacteristic(this._txCharacteristicUuid);
+
+          console.log('Getting RX Characteristic...');
+          this._rxCharacteristic = await service.getCharacteristic(this._rxCharacteristicUuid);
+
+          console.log('Starting Notifications for RX...');
+          await this._rxCharacteristic.startNotifications();
+          this._rxCharacteristic.addEventListener('characteristicvaluechanged', this._handleCharacteristicValueChanged.bind(this));
+
+          console.log('Connected and ready to send and receive data!');
+          document.getElementById('connectButton').style.display = 'none';
+          displayMessage(`Connected to: ${this._device.name}`, "#ccc");
+        } catch (error) {
+          console.error('Error:', error);
+        }
+      }
+
+      _handleCharacteristicValueChanged(event) {
+        const value = new TextDecoder().decode(event.target.value);
+        let displayValue = value;
+        if (this._timestampsEnabled) {
+          const timestamp = new Date().toLocaleTimeString();
+          displayValue = `[${timestamp}] ${value}`;
+        }
+        displayMessage(displayValue, "#0f0");
+      }
+
+      async send(data) {
+        if (!this._txCharacteristic) {
+          console.error('No connected device.');
+          return;
+        }
+        const encoder = new TextEncoder();
+        const encodedData = encoder.encode(data);
+        try {
+          await this._txCharacteristic.writeValue(encodedData);
+          let displayValue = `Sent: ${data}`;
+          if (this._timestampsEnabled) {
+            const timestamp = new Date().toLocaleTimeString();
+            displayValue = `[${timestamp}] Sent: ${data}`;
+          }
+          displayMessage(displayValue, "#c080ff");
+        } catch (error) {
+          console.error('Failed to send data:', error);
+        }
+      }
+
+      toggleTimestamps() {
+        this._timestampsEnabled = !this._timestampsEnabled;
+        document.getElementById('toggleTimestampButton').innerText = this._timestampsEnabled ? 'Disable Timestamps' : 'Enable Timestamps';
+      }
+    }
+
+    const bluetoothTerminal = new BluetoothTerminal();
+    const inputField = document.getElementById('dataToSend');
+    const receivedData = document.getElementById('receivedData');
+    const connectButton = document.getElementById('connectButton');
+    const clearConsoleButton = document.getElementById('clearConsoleButton');
+    const toggleTimestampButton = document.getElementById('toggleTimestampButton');
+    const toggleThemeButton = document.getElementById('toggleThemeButton');
+
+    let sentDataHistory = [];
+    let historyIndex = -1;
+
+    connectButton.addEventListener('click', () => {
+      bluetoothTerminal.connect();
+    });
+
+    document.getElementById('sendButton').addEventListener('click', sendInputData);
+
+    clearConsoleButton.addEventListener('click', () => {
+      receivedData.innerHTML = '';
+    });
+
+    toggleTimestampButton.addEventListener('click', () => {
+      bluetoothTerminal.toggleTimestamps();
+    });
+
+    toggleThemeButton.addEventListener('click', toggleTheme);
+
+    inputField.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        sendInputData();
+      } else if (event.key === 'ArrowUp') {
+        if (historyIndex > 0) {
+          historyIndex--;
+          inputField.value = sentDataHistory[historyIndex];
+        }
+      } else if (event.key === 'ArrowDown') {
+        if (historyIndex < sentDataHistory.length - 1) {
+          historyIndex++;
+          inputField.value = sentDataHistory[historyIndex];
+        } else {
+          inputField.value = '';
+        }
+      }
+    });
+
+    function sendInputData() {
+      const data = inputField.value;
+      if (data.trim() !== '') {
+        bluetoothTerminal.send(data);
+        sentDataHistory.push(data);
+        historyIndex = sentDataHistory.length;
+        inputField.value = '';
+      }
+    }
+
+function displayMessage(message, color) {
+  const span = document.createElement("span");
+
+  // Check the current theme and adjust the text color if needed
+  const isDark = document.body.classList.contains("dark");
+  if (!isDark) {
+    // Use a darker color for light mode
+    color = "#3c3f41";
+  }
+
+  span.style.color = color;
+  span.innerHTML = message + "<br>";
+  receivedData.appendChild(span);
+
+  // Check if the user is close to the bottom of the receivedData container
+  const distanceFromBottom = receivedData.scrollHeight - receivedData.scrollTop - receivedData.clientHeight;
+  const threshold = 50; // You can adjust this threshold value as needed
+
+  // Only scroll to the bottom if the user is close to the bottom
+  if (distanceFromBottom <= threshold) {
+    receivedData.scrollTop = receivedData.scrollHeight;
+  }
+}
+
+
+
+
+
+function toggleTheme() {
+  const elements = [
+    document.body,
+    document.getElementById("container"),
+    receivedData,
+    inputField,
+    connectButton,
+    sendButton, // Added sendButton here
+    clearConsoleButton,
+    toggleTimestampButton,
+    toggleThemeButton
+  ];
+  const isDark = document.body.classList.contains("dark");
+  elements.forEach(el => {
+    el.classList.toggle("dark", !isDark);
+    el.classList.toggle("light", isDark);
+  });
+  toggleThemeButton.innerText = isDark ? 'Dark Mode' : 'Light Mode';
+}
+
+  </script>
+</body>
+</html>
